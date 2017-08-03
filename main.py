@@ -3,13 +3,30 @@
 import os, sys, re
 
 DELIMITERS = " (){}[]\t\n!@#$%^&*-=+\\|,./<>?~`'\""
-DELIMITER_REGEX = "(\t| |\(|\))+"
+DELIMITER_REGEX = r"(\s+|\)|\(|\,|\.|;|{|})"
 
-macros = {}
+macros = { "__FILE__" : "",
+           "__LINE__" : "0",
+           "__DATE__" : "",
+           "__TIME__" : "",
+           "__STDC__" : "",
+           "__OBJC__" : "0",
+           "__cplusplus" : "0",
+           "__ASSEMBLER__" : "",
+           "__STDC_HOSTED__" : "",
+           "__STDC_VERSION__" : "",
+         }
 
 includeDirs = [ "/usr/include/",
                 "/usr/lib/gcc/x86_64-linux-gnu/4.8/include/"
               ]
+
+def getMacroValue(valueOrMacro):
+    if valueOrMacro.strip() in macros:
+        ret = getMacroValue(macros[valueOrMacro.strip()]).strip()
+        return ret
+    else:
+        return valueOrMacro.strip()
 
 def defined(MACRO):
     return MACRO in macros
@@ -21,13 +38,19 @@ def isFloat(value):
     except ValueError:
         return False
 
+def getNumOperands(operator):
+    if operator in '!~' or operator == "defined" or operator == "not": return 1
+    else: return 2
+
 def isoperator(token):
     return (token == "&&" or token == "||" or token == ">=" or
+            token == "and" or token == "or" or token == "not" or
             token == "<=" or token == "==" or token == "!=" or
-            token == ">>" or token == "<<" or token in "!~+-<>&|^*/%()")
+            token == ">>" or token == "<<" or token in "!~+-<>&|^*/%()" or
+            token == "defined")
 
 def getPrecedence(operator):
-    if operator in "()":
+    if operator == "defined":
         return 1
     elif operator in "!~":
         return 2
@@ -51,6 +74,8 @@ def getPrecedence(operator):
         return 11
     elif operator == "||":
         return 12
+    elif operator in "()":
+        return 99
     else:
         return -1
 
@@ -63,21 +88,46 @@ def getAssociativity(operator):
         return "right"
 
 def tokenize(expression):
-    s = re.compile(r'(\s+|\S+|\d+|\W+)')
+    s = re.compile(r'(\s+|\S+|\d+|\W+|\(|\))')
     all = s.findall(expression)
     all2 = []
-    for i in all:
+    x = 0
+    while x < len(all):
+        i = all[x]
         if i.strip():
-            if i.startswith('defined'):
-                all2.append(i)
-            elif i.startswith('('):
+            if i == "defined":
+                all2.append('defined')
+            elif i.startswith('defined'):
+                all[x] = ''
+                all.insert(x, i[7:])
+                all.insert(x, i[:7])
+                continue
+            elif i == '!':
+                all2.append('!')
+            elif i.startswith('!'):
+                all[x] = ''
+                all.insert(x, i[1:])
+                all.insert(x, '!')
+                continue
+            elif i == '(':
                 all2.append('(')
-                all2.append(i[1:])
-            elif i.endswith(')'):
-                all2.append(i[:-1])
+            elif i == ')':
                 all2.append(')')
+            elif i.startswith('('):
+                all[x] = ''
+                all.insert(x, i[1:])
+                all.insert(x, '(')
+                continue
+            elif i.endswith(')'):
+                all[x] = ''
+                all.insert(x, ')')
+                all.insert(x, i[:-1])
+                continue
+            elif i == '':
+                pass
             else:
                 all2.append(i)
+        x += 1
     return all2
 
 # The shunting yard algorithm
@@ -95,32 +145,35 @@ def parseExpression(expression):
     while i < len(tokens):
         token = tokens[i]
 
-        if token.startswith('defined'):
-            macro = token.strip().split('(')[1][:-1].rstrip()
-            token = str(int(defined(macro)))
+        # if token.startswith('defined'):
+            # macro = token.strip().split('(')[1][:-1].rstrip()
+            # token = str(int(defined(macro)))
 
-        if token in macros:
-            token = macros[token]
+        # if token in macros:
+        #     token = getMacroValue(token)
 
-        if token.isdigit():
-            # print "Adding '" + token + "' to output"
-            outputqueue.append(token)
-        elif token not in "()" and isoperator(token):
+        # if isoperator(token) and getNumOperands(token) == 1:
+            # outputqueue.append(token)
+        if token not in "()" and isoperator(token):
             while (operatorstack and
-                   (getPrecedence(operatorstack[-1]) >= getPrecedence(token)) and
+                   (getPrecedence(operatorstack[-1]) <= getPrecedence(token)) and
                    (getAssociativity(operatorstack[-1]) == "left")):
-                # print "Adding '" + operatorstack[-1] + "' to output."
+                # print "Adding operator '" + operatorstack[-1] + "' (precedence %d) to output."%getPrecedence(operatorstack[-1])
                 outputqueue.append(operatorstack.pop())
-            # print "Adding '" + token + "' to operator stack"
+            # print "Adding '" + token + "' (precedence %d) to operator stack"%getPrecedence(token)
             operatorstack.append(token)
         elif token == "(":
-            # print "Adding '" + token + "' to operator stack"
+            # print "Adding operator '" + token + "' to operator stack"
             operatorstack.append(token)
         elif token == ")":
             while operatorstack and operatorstack[-1] != "(":
-                # print "Adding '" + operatorstack[-1] + "' to output"
+                # print "Adding operator '" + operatorstack[-1] + "' to output"
                 outputqueue.append(operatorstack.pop())
+            # print outputqueue
             operatorstack.pop()
+        elif not isoperator(token):
+            # print "Adding operand '" + token + "' to output"
+            outputqueue.append(token)
         else:
             # print "Adding '" + token + "' to output"
             outputqueue.append(token)
@@ -139,24 +192,37 @@ def parseExpression(expression):
     return outputqueue
 
 def evaluateExpression(expression):
-    # print "EVALUATE"
     polishNotation = parseExpression(expression)
     valuesStack = []
+    # print "EVALUATE"
     for token in polishNotation:
-        # print valuesStack
-        if token.isdigit() or isFloat(token):
-            valuesStack.append(token)
-        else:
+        if isoperator(token):
             operator = token
 
             if operator == "&&": operator = "and"
             elif operator == "||": operator = "or"
+            elif operator == "!": operator = "not"
 
-            rightoperand = str(valuesStack.pop())
-            leftoperand = str(valuesStack.pop())
+            # print operator
 
-            result = eval(leftoperand + ' ' + operator + ' ' + rightoperand)
+            result = ""
+            if getNumOperands(operator) == 2:
+                rightoperand = getMacroValue(str(valuesStack.pop()))
+                leftoperand = getMacroValue(str(valuesStack.pop()))
+
+                result = eval(leftoperand + ' ' + operator + ' ' + rightoperand)
+            else:
+                # print valuesStack
+                operand = str(valuesStack.pop())
+                if operator == "defined":
+                    result = defined(operand)
+                else:
+                    result = eval(operator + ' ' + getMacroValue(operand))
+
             valuesStack.append(result)
+        else:
+            # print token
+            valuesStack.append(token)
 
     if len(valuesStack) != 1:
         print "Malformed expression!"
@@ -167,7 +233,7 @@ def evaluateExpression(expression):
 def macroizeLine(line):
     tokenized = [t for t in re.split(DELIMITER_REGEX, line) if len(t.strip()) != 0]
 
-    atleast = 0
+    i = 0
     stringing = False
     for token in tokenized:
         # Don't replace in strings
@@ -178,12 +244,12 @@ def macroizeLine(line):
                 stringing = True
             continue
 
-        if token in macros:
-            # Do this because python doesn't have a way to replace a string based solely on position+range
-            line = macros[token].join((line[:line.find(token, atleast)], line[line.find(token, atleast) + len(token):]))
-        atleast += len(token)
+        if not stringing:
+            if token in macros:
+                tokenized[i] = getMacroValue(token)
+        i += 1
 
-    return line
+    return ' '.join(tokenized)
 
 
 def getWord(line):
@@ -224,18 +290,187 @@ def main():
 
     processedLines = process(filename, lines)
 
+    i = 0
     for line in processedLines:
-        print line
+        print i, ":", line
+        i += 1
+
+def includeStatement(nodirective, i, lines):
+    filename = nodirective[1:].split('>' if nodirective.startswith('<') else '"', 1)[0]
+    fullFilename = None
+
+    if nodirective.startswith('<'):
+        for inc in includeDirs:
+            if os.path.exists(os.path.join(inc, filename)):
+                fullFilename = os.path.join(inc, filename)
+                break
+
+    if fullFilename == None:
+        if os.path.exists(os.path.join(".", filename)):
+            fullFilename = os.path.join(".", filename)
+        else:
+            print "No such file or directory found: " + filename
+            sys.exit(1)
+
+    lines[i] = ""
+
+    with open(fullFilename, 'r') as f:
+        processedLines = process(fullFilename, f.read().split('\n'))
+
+        n = 0
+        while n < len(processedLines):
+            lines.insert(i + n, processedLines[n])
+            n += 1
+
+        # lines.insert(i + n, "#line " + str(i))
+        i += n - 1
+
+    return i
+
+def ifStatement(cond, i, lines, skipAll = False):
+    if cond:
+        remove = False
+        blockcomment = False
+
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # Process comments first
+            if blockcomment:
+                if '*/' in line:
+                    line = line[line.find('*/') + 2:]
+                    blockcomment = False
+                else:
+                    lines[i] = ""
+                    i += 1
+                    continue
+
+            while line.endswith('\\'):
+                i += 1
+                # Remove the \ character before concatenating
+                line = line[:-1] + lines[i].strip()
+                lines[i - 1] = ""
+
+            if '//' in line:
+                line = line[:line.find('//')]
+            if '/*' in line:
+                line = line[:line.find('/*')]
+                blockcomment = True
+
+            directive, nodirective = getDirectiveAndNoDirective(line)
+
+            if directive == "if":
+                lines[i] = ""
+                i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
+                continue
+            elif directive == "ifndef":
+                lines[i] = ""
+                i = ifStatement(nodirective not in macros, i + 1, lines)
+                continue
+            elif directive == "else" or directive == "elif":
+                remove = True
+            elif directive == "endif":
+                lines[i] = ""
+                return i + 1
+            elif directive == "include":
+                lines[i] = ""
+                oldFilename = getMacroValue("__FILE__")
+                i += includeStatement(nodirective, i, lines)
+                macros["__FILE__"] = oldFilename
+                continue
+            elif directive == "ifdef":
+                lines[i] = ""
+                i = ifStatement(nodirective in macros, i + 1, lines)
+                continue
+            elif directive == "define":
+                lines[i] = ""
+                defineMacro(nodirective)
+                continue
+
+            if remove:
+                line = ""
+
+            lines[i] = line
+            i += 1
+    else:
+        while i < len(lines):
+            line = lines[i].strip()
+            directive, nodirective = getDirectiveAndNoDirective(line)
+            if directive == "if" or directive == "ifdef" or directive == "ifndef":
+                lines[i] = ""
+                i = ifStatement(False, i + 1, lines, True)
+                continue
+            elif directive == "else":
+                if not skipAll:
+                    lines[i] = ""
+                    i = ifStatement(True, i + 1, lines)
+                    return i
+            elif directive == "elif":
+                if not skipAll:
+                    lines[i] = ""
+                    i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
+                    return i
+            elif directive == "endif":
+                print "endif"
+                lines[i] = ""
+                return i + 1
+
+            lines[i] = ""
+
+            i += 1
+
+    if i >= len(lines):
+        print "Mismatched endifs"
+        sys.exit(1)
+
+    return i
+
+def defineMacro(nodirective):
+    c = 0
+    while c < len(nodirective):
+        if nodirective[c] in DELIMITERS:
+            break
+        c += 1
+
+    macro = nodirective[:c]
+
+    value = getMacroValue(nodirective[c:])
+    # print value
+
+    # TODO: Handle macro functions
+
+    macros[macro] = value
+
+def undefineMacro(nodirective):
+    c = 0
+    while c < len(nodirective):
+        if nodirective[c] in DELIMITERS:
+            break
+        c += 1
+
+    macro = nodirective[:c]
+
+    if macro in macros:
+        macros.pop(macro, None)
+    else:
+        print "Undefined macro " + macro
+        sys.exit(1)
 
 def process(filename, lines):
+    global macros
     print "Processing " + filename
 
-    global macros
+    macros["__FILE__"] = filename
+
 
     #TODO: Convert ifndef and ifdef statements to `if defined` statements
 
     blockcomment = False
-    skippingToNextElse = False
+
+    depth = 0
+    lastDepth = 0
+    ifFailure = False
+    
     i = 0
     lineNum = 0
     while i < len(lines):
@@ -253,6 +488,7 @@ def process(filename, lines):
 
         while line.endswith('\\'):
             i += 1
+            macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
             # Remove the \ character before concatenating
             line = line[:-1] + lines[i].strip()
             lines[i - 1] = ""
@@ -263,153 +499,72 @@ def process(filename, lines):
             line = line[:line.find('/*')]
             blockcomment = True
 
-
         if line.startswith('#'):
             directive, nodirective = getDirectiveAndNoDirective(line)
 
+            if directive == "if":
+                lines[i] = ""
+                i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
+
             if directive == "define":
-                c = 0
-                while c < len(nodirective):
-                    if nodirective[c] in DELIMITERS:
-                        break
-                    c += 1
-
-
-                macro = nodirective[:c]
-
-                value = nodirective[c:]
-
-                # TODO: Handle macro functions
-
-                macros[macro] = value
-
+                defineMacro(nodirective)
+            elif directive == "undef":
+                undefineMacro(nodirective)
             elif directive == "ifdef":
-                c = 0
-                while c < len(nodirective):
-                    if nodirective[c] in DELIMITERS:
-                        break
-                    c += 1
-
-                macro = nodirective[:c]
-
-                if macro not in macros:
-                    line = ""
-                    while i < len(lines):
-                        if(getDirectiveAndNoDirective(lines[i])[0] == "endif"):
-                            break
-                        lines[i] = ""
-                        i += 1
-                    lines[i] = ""
-
+                lines[i] = ""
+                i = ifStatement(nodirective in macros, i + 1, lines)
             elif directive == "ifndef":
+                lines[i] = ""
+                i = ifStatement(nodirective not in macros, i + 1, lines)
+            elif directive == "include":
+                oldFilename = filename
+                i = includeStatement(nodirective, i, lines) + 1
+                macros["__FILE__"] = oldFilename
+            elif directive == "line":
+                num = ""
                 c = 0
                 while c < len(nodirective):
-                    if nodirective[c] in DELIMITERS:
+                    if nodirective[c] not in DELIMITERS:
+                        num += nodirective[c]
+                    else:
                         break
                     c += 1
 
-                macro = nodirective[:c]
+                num = num.strip()
+                value = num
 
-                if macro in macros:
-                    line = ""
-                    while i < len(lines):
-                        if(getDirectiveAndNoDirective(lines[i])[0] == "endif"):
-                            break
-                        lines[i] = ""
-                        i += 1
-                    lines[i] = ""
-
-            elif directive == "include":
-                filename = nodirective[1:].split('>' if nodirective.startswith('<') else '"', 1)[0]
-                fullFilename = None
-
-                if nodirective.startswith('<'):
-                    for inc in includeDirs:
-                        if os.path.exists(os.path.join(inc, filename)):
-                            fullFilename = os.path.join(inc, filename)
-                            break
-
-                if fullFilename == None:
-                    if os.path.exists(os.path.join(".", filename)):
-                        fullFilename = os.path.join(".", filename)
-                        break
-                    else:
-                        print "No such file or directory found: " + filename
+                if not num.isdigit():
+                    value = getMacroValue(num)
+                    if not value.isdigit():
+                        print "Invalid line digit-sequence specifier."
                         sys.exit(1)
 
-                lines[i] = ""
+                scharseq = ""
+                gettingscharseq = False
+                while c < len(nodirective):
+                    if nodirective[c] == '"':
+                        if gettingscharseq: break
 
-                with open(fullFilename, 'r') as f:
-                    processedLines = process(fullFilename, f.read().split('\n'))
+                        gettingscharseq = True
+                    else:
+                        if gettingscharseq:
+                            scharseq += nodirective[c]
+                    c += 1
 
-                    n = 0
-                    while n < len(processedLines):
-                        lines.insert(i + n, processedLines[n])
-                        n += 1
-
-                    lines.insert(i + n, "#line " + str(i))
-                    i += n
-
-            elif directive == "if":
-                # expression = nodirective
-                expression_result = evaluateExpression(nodirective)
-                print "RESULT = " + str(expression_result)
-
-                if not bool(int(expression_result)):
-                    skippingToNextElse = True
-                    line = ""
-                    while i < len(lines):
-                        directive = getDirectiveAndNoDirective(lines[i])[0]
-                        if(directive == "endif" or directive == "elif" or
-                           directive == "else"):
-                            break
-                        lines[i] = ""
-                        i += 1
-                    lines[i] = ""
-
-            elif directive == "elif":
-                if skippingToNextElse:
-                    skippingToNextElse = False
-                    # expression = nodirective
-                    expression_result = evaluateExpression(nodirective)
-                    print "RESULT = " + str(expression_result)
-
-                    if not bool(int(expression_result)):
-                        skippingToNextElse = True
-                        line = ""
-                        while i < len(lines):
-                            if(getDirectiveAndNoDirective(lines[i])[0] == "endif"):
-                                break
-                            lines[i] = ""
-                            i += 1
-                        lines[i] = ""
-                else:
-                    line = ""
-                    while i < len(lines):
-                        if(getDirectiveAndNoDirective(lines[i])[0] == "endif"):
-                            break
-                        lines[i] = ""
-                        i += 1
-                    lines[i] = ""
-
-            elif directive == "else":
-                if not skippingToNextElse:
-                    line = ""
-                    while i < len(lines):
-                        if(getDirectiveAndNoDirective(lines[i])[0] == "endif"):
-                            break
-                        lines[i] = ""
-                        i += 1
-                    lines[i] = ""
+                if scharseq != "":
+                    filename = scharseq
+                macros["__LINE__"] = str(int(value))
 
             line = ""
 
         line = macroizeLine(line)
 
         lines[i] = line
-        # print i, ": " + line
         i += 1
-        lineNum += 1
+
+        macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
+
+    print "Done processing " + filename
 
     return lines
 
