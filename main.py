@@ -235,8 +235,7 @@ def stringify(token):
 
 def macroizeLine(line, extraMacros = {}):
     tokenized = [t for t in re.split(DELIMITER_REGEX, line) if len(t.strip()) != 0]
-
-    print tokenized
+    # print "MACROIZE START!"
 
     i = 0
     stringing = False
@@ -251,13 +250,13 @@ def macroizeLine(line, extraMacros = {}):
             continue
 
         if not stringing:
-            print token
+            # print token
 
             if defined(token, extraMacros):
                 if isMacroAFunc(token, extraMacros):
                     params, value = macroFunctions[token]
-                    print params
-                    print value
+                    # print params
+                    # print value
                     numParams = len(params)
 
                     i += 2
@@ -268,13 +267,28 @@ def macroizeLine(line, extraMacros = {}):
                         i += 1
 
                     givenParams = [y.strip() for y in ' '.join(givenParamsTokens).split(',')]
+                    result = ""
 
-                    if len(params) == len(givenParams):
+                    if len(params) > 0 and params[-1].endswith("..."):
+                        variadicName = params[-1][:-3]
+                        if variadicName == '': variadicName = "__VA_ARGS__"
+                        passableValues = dict(extraMacros,
+                                              **dict(zip(params[:-1] + [variadicName],
+                                                         givenParams[:len(params) - 1] + [", ".join([getMacroValue(p.strip()) for p in givenParams[len(params) - 1:]])])))
+                        # print "givenParams =", givenParams
+                        # print "passableValues =", passableValues
+                        # print "value = ", value.replace(variadicName, passableValues[variadicName])
+                        result = macroizeLine(value, passableValues)
+                        # print "RESULT =",result
+                    elif len(params) == len(givenParams):
                         print givenParams
 
                         passableValues = dict(extraMacros, **dict(zip(params, givenParams)))
                         result = macroizeLine(value, passableValues)
                         print result
+                    tokenized[start - 2] = result
+                    for t in range(start - 1, i + 1):
+                        tokenized[t] = ''
 
                 else:
                     tokenized[i] = getMacroValue(token, extraMacros)
