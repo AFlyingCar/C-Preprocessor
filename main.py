@@ -3,7 +3,7 @@
 import os, sys, re
 
 DELIMITERS = " (){}[]\t\n!@#$%^&*-=+\\|,./<>?~`'\""
-DELIMITER_REGEX = r"(\s+|\)|\(|\,|\.|;|{|})"
+DELIMITER_REGEX = r"(\s+|\)|\(|\,|\.|;|{|}|##|#)"
 
 macros = { "__FILE__" : "",
            "__LINE__" : "0",
@@ -16,20 +16,29 @@ macros = { "__FILE__" : "",
            "__STDC_HOSTED__" : "",
            "__STDC_VERSION__" : "",
          }
+# "NAME" : (["param1", "param2", ...], "value")
+macroFunctions = {
+                 }
 
 includeDirs = [ "/usr/include/",
                 "/usr/lib/gcc/x86_64-linux-gnu/4.8/include/"
               ]
 
-def getMacroValue(valueOrMacro):
+def getMacroValue(valueOrMacro, extraMacros = {}):
     if valueOrMacro.strip() in macros:
-        ret = getMacroValue(macros[valueOrMacro.strip()]).strip()
+        ret = getMacroValue(macros[valueOrMacro.strip()], extraMacros).strip()
+        return ret
+    elif valueOrMacro.strip() in extraMacros:
+        ret = getMacroValue(extraMacros[valueOrMacro.strip()], extraMacros).strip()
         return ret
     else:
         return valueOrMacro.strip()
 
-def defined(MACRO):
-    return MACRO in macros
+def isMacroAFunc(macro, extraMacros = {}):
+    return macro in macroFunctions or (macro in extraMacros and type(extraMacros[macro]) == tuple)
+
+def defined(macro, extraMacros = {}):
+    return macro in macros or macro in macroFunctions or macro in extraMacros
 
 def isFloat(value):
     try:
@@ -145,15 +154,6 @@ def parseExpression(expression):
     while i < len(tokens):
         token = tokens[i]
 
-        # if token.startswith('defined'):
-            # macro = token.strip().split('(')[1][:-1].rstrip()
-            # token = str(int(defined(macro)))
-
-        # if token in macros:
-        #     token = getMacroValue(token)
-
-        # if isoperator(token) and getNumOperands(token) == 1:
-            # outputqueue.append(token)
         if token not in "()" and isoperator(token):
             while (operatorstack and
                    (getPrecedence(operatorstack[-1]) <= getPrecedence(token)) and
@@ -230,12 +230,18 @@ def evaluateExpression(expression):
 
     return valuesStack[0]
 
-def macroizeLine(line):
+def stringify(token):
+    return '"' + token + '"'
+
+def macroizeLine(line, extraMacros = {}):
     tokenized = [t for t in re.split(DELIMITER_REGEX, line) if len(t.strip()) != 0]
+
+    print tokenized
 
     i = 0
     stringing = False
-    for token in tokenized:
+    while i < len(tokenized):
+        token = tokenized[i]
         # Don't replace in strings
         if "\"" in token or "'" in token:
             if stringing:
@@ -245,8 +251,42 @@ def macroizeLine(line):
             continue
 
         if not stringing:
-            if token in macros:
-                tokenized[i] = getMacroValue(token)
+            print token
+
+            if defined(token, extraMacros):
+                if isMacroAFunc(token, extraMacros):
+                    params, value = macroFunctions[token]
+                    print params
+                    print value
+                    numParams = len(params)
+
+                    i += 2
+                    start = i
+                    givenParamsTokens = []
+                    while tokenized[i] != ")":
+                        givenParamsTokens.append(tokenized[i])
+                        i += 1
+
+                    givenParams = [y.strip() for y in ' '.join(givenParamsTokens).split(',')]
+
+                    if len(params) == len(givenParams):
+                        print givenParams
+
+                        passableValues = dict(extraMacros, **dict(zip(params, givenParams)))
+                        result = macroizeLine(value, passableValues)
+                        print result
+
+                else:
+                    tokenized[i] = getMacroValue(token, extraMacros)
+
+            if token == '##':
+                if i != 0 and i + 1 < len(tokenized):
+                    tokenized[i] = getMacroValue(tokenized[i - 1], extraMacros) + getMacroValue(tokenized[i + 1], extraMacros)
+                    tokenized[i - 1] = ''
+                    tokenized[i + 1] = ''
+                else:
+                    print "Stray '##' in the program"
+                    sys.exit(1)
         i += 1
 
     return ' '.join(tokenized)
@@ -435,11 +475,26 @@ def defineMacro(nodirective):
     macro = nodirective[:c]
 
     value = getMacroValue(nodirective[c:])
-    # print value
 
-    # TODO: Handle macro functions
+    if value.startswith('('):
+        rawParams = ""
+        realValue = ""
+        paramsList = []
 
-    macros[macro] = value
+        c = 0
+        while c < len(value):
+            if value[c] == ')':
+                break
+            c += 1
+
+        rawParams = value[1:c]
+        realValue = value[c + 1:].strip()
+
+        paramsList = [p.strip() for p in rawParams.split(',')]
+
+        macroFunctions[macro] = (paramsList, realValue)
+    else:
+        macros[macro] = value
 
 def undefineMacro(nodirective):
     c = 0
@@ -452,6 +507,8 @@ def undefineMacro(nodirective):
 
     if macro in macros:
         macros.pop(macro, None)
+    elif macro in macroFunctions:
+        macroFunctions.pop(macro, None)
     else:
         print "Undefined macro " + macro
         sys.exit(1)
@@ -498,6 +555,8 @@ def process(filename, lines):
         if '/*' in line:
             line = line[:line.find('/*')]
             blockcomment = True
+
+        # line = handleStringConcatenation(line)
 
         if line.startswith('#'):
             directive, nodirective = getDirectiveAndNoDirective(line)
