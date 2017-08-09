@@ -432,6 +432,10 @@ def ifStatement(cond, i, lines, skipAll = False):
                 i += includeStatement(nodirective, i, lines)
                 macros["__FILE__"] = oldFilename
                 continue
+            elif directive == "undef":
+                lines[i] = ""
+                undefineMacro(nodirective)
+                continue
             elif directive == "ifdef":
                 lines[i] = ""
                 i = ifStatement(nodirective in macros, i + 1, lines)
@@ -444,7 +448,7 @@ def ifStatement(cond, i, lines, skipAll = False):
             if remove:
                 line = ""
 
-            lines[i] = line
+            lines[i] = macroizeLine(line)
             i += 1
     else:
         while i < len(lines):
