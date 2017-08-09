@@ -6,11 +6,12 @@ DELIMITERS = " (){}[]\t\n!@#$%^&*-=+\\|,./<>?~`'\""
 DELIMITER_REGEX = r"(\s+|\)|\(|\,|\.|;|{|}|##|#)"
 
 macros = { "__FILE__" : "",
-           "__LINE__" : "0",
+           "__LINE__" : "1",
            "__DATE__" : "",
            "__TIME__" : "",
            "__STDC__" : "",
            "__OBJC__" : "0",
+           "__COUNTER__" : "0",
            "__cplusplus" : "0",
            "__ASSEMBLER__" : "",
            "__STDC_HOSTED__" : "",
@@ -24,7 +25,15 @@ includeDirs = [ "/usr/include/",
                 "/usr/lib/gcc/x86_64-linux-gnu/4.8/include/"
               ]
 
+def getCurrentLine():
+    return macros["__LINE__"]
+
 def getMacroValue(valueOrMacro, extraMacros = {}):
+    # Special case for __COUNTER__
+    if valueOrMacro.strip() == "__COUNTER__":
+        macros["__COUNTER__"] = str(int(macros["__COUNTER__"]) + 1)
+        return macros["__COUNTER__"]
+
     if valueOrMacro.strip() in macros:
         ret = getMacroValue(macros[valueOrMacro.strip()], extraMacros).strip()
         return ret
@@ -344,7 +353,7 @@ def main():
 
     processedLines = process(filename, lines)
 
-    i = 0
+    i = 1
     for line in processedLines:
         print i, ":", line
         i += 1
@@ -376,7 +385,6 @@ def includeStatement(nodirective, i, lines):
             lines.insert(i + n, processedLines[n])
             n += 1
 
-        # lines.insert(i + n, "#line " + str(i))
         i += n - 1
 
     return i
@@ -387,6 +395,8 @@ def ifStatement(cond, i, lines, skipAll = False):
         blockcomment = False
 
         while i < len(lines):
+            removeLine = False
+
             line = lines[i].strip()
 
             # Process comments first
@@ -395,12 +405,16 @@ def ifStatement(cond, i, lines, skipAll = False):
                     line = line[line.find('*/') + 2:]
                     blockcomment = False
                 else:
+                    macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
+
                     lines[i] = ""
                     i += 1
                     continue
 
             while line.endswith('\\'):
                 i += 1
+                macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
+
                 # Remove the \ character before concatenating
                 line = line[:-1] + lines[i].strip()
                 lines[i - 1] = ""
@@ -411,7 +425,11 @@ def ifStatement(cond, i, lines, skipAll = False):
                 line = line[:line.find('/*')]
                 blockcomment = True
 
-            directive, nodirective = getDirectiveAndNoDirective(line)
+            if line.lstrip().startswith("#"):
+                directive, nodirective = getDirectiveAndNoDirective(line)
+                removeLine = True
+            else:
+                directive, nodirective = ["",""]
 
             if directive == "if":
                 lines[i] = ""
@@ -428,25 +446,32 @@ def ifStatement(cond, i, lines, skipAll = False):
                 return i + 1
             elif directive == "include":
                 lines[i] = ""
+                oldLineNum = getCurrentLine()
                 oldFilename = getMacroValue("__FILE__")
                 i += includeStatement(nodirective, i, lines)
                 macros["__FILE__"] = oldFilename
-                continue
+                macros["__LINE__"] = str(oldLineNum)
+                removeLine = True
+            elif directive == "line":
+                doLineDirective(nodirective)
             elif directive == "undef":
                 lines[i] = ""
                 undefineMacro(nodirective)
-                continue
+                removeLine = True
             elif directive == "ifdef":
                 lines[i] = ""
                 i = ifStatement(nodirective in macros, i + 1, lines)
-                continue
+                removeLine = True
             elif directive == "define":
-                lines[i] = ""
                 defineMacro(nodirective)
-                continue
+                removeLine = True
 
-            if remove:
+            if remove or removeLine:
                 line = ""
+
+            # Don't increase the line count if it was just changed.
+            if directive != "line":
+                macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
 
             lines[i] = macroizeLine(line)
             i += 1
@@ -474,6 +499,8 @@ def ifStatement(cond, i, lines, skipAll = False):
                 return i + 1
 
             lines[i] = ""
+
+            macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
 
             i += 1
 
@@ -514,6 +541,41 @@ def defineMacro(nodirective):
     else:
         macros[macro] = value
 
+def doLineDirective(nodirective):
+    num = ""
+    c = 0
+    while c < len(nodirective):
+        if nodirective[c] not in DELIMITERS:
+            num += nodirective[c]
+        else:
+            break
+        c += 1
+
+    num = num.strip()
+    value = num
+
+    if not num.isdigit():
+        value = getMacroValue(num)
+        if not value.isdigit():
+            print "Invalid line digit-sequence specifier."
+            sys.exit(1)
+
+    scharseq = ""
+    gettingscharseq = False
+    while c < len(nodirective):
+        if nodirective[c] == '"':
+            if gettingscharseq: break
+
+            gettingscharseq = True
+        else:
+            if gettingscharseq:
+                scharseq += nodirective[c]
+        c += 1
+
+    if scharseq != "":
+        filename = scharseq
+    macros["__LINE__"] = str(int(value))
+
 def undefineMacro(nodirective):
     c = 0
     while c < len(nodirective):
@@ -536,6 +598,7 @@ def process(filename, lines):
     print "Processing " + filename
 
     macros["__FILE__"] = filename
+    macros["__LINE__"] = "1"
 
 
     #TODO: Convert ifndef and ifdef statements to `if defined` statements
@@ -563,6 +626,7 @@ def process(filename, lines):
 
         while line.endswith('\\'):
             i += 1
+            # getCurrentLine() # This will increase the line counter by one
             macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
             # Remove the \ character before concatenating
             line = line[:-1] + lines[i].strip()
@@ -595,42 +659,12 @@ def process(filename, lines):
                 i = ifStatement(nodirective not in macros, i + 1, lines)
             elif directive == "include":
                 oldFilename = filename
+                oldLineNum = getMacroValue("__LINE__")
                 i = includeStatement(nodirective, i, lines) + 1
                 macros["__FILE__"] = oldFilename
+                macros["__LINE__"] = oldLineNum
             elif directive == "line":
-                num = ""
-                c = 0
-                while c < len(nodirective):
-                    if nodirective[c] not in DELIMITERS:
-                        num += nodirective[c]
-                    else:
-                        break
-                    c += 1
-
-                num = num.strip()
-                value = num
-
-                if not num.isdigit():
-                    value = getMacroValue(num)
-                    if not value.isdigit():
-                        print "Invalid line digit-sequence specifier."
-                        sys.exit(1)
-
-                scharseq = ""
-                gettingscharseq = False
-                while c < len(nodirective):
-                    if nodirective[c] == '"':
-                        if gettingscharseq: break
-
-                        gettingscharseq = True
-                    else:
-                        if gettingscharseq:
-                            scharseq += nodirective[c]
-                    c += 1
-
-                if scharseq != "":
-                    filename = scharseq
-                macros["__LINE__"] = str(int(value))
+                doLineDirective(nodirective)
 
             line = ""
 
