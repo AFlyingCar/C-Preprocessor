@@ -34,20 +34,21 @@ def getMacroValue(valueOrMacro, extraMacros = {}):
         macros["__COUNTER__"] = str(int(macros["__COUNTER__"]) + 1)
         return macros["__COUNTER__"]
 
-    if valueOrMacro.strip() in macros:
-        ret = getMacroValue(macros[valueOrMacro.strip()], extraMacros).strip()
-        return ret
-    elif valueOrMacro.strip() in extraMacros:
-        ret = getMacroValue(extraMacros[valueOrMacro.strip()], extraMacros).strip()
-        return ret
+    if valueOrMacro.strip() in extraMacros:
+        # ret = getMacroValue(extraMacros[valueOrMacro.strip()], extraMacros).strip()
+        return extraMacros[valueOrMacro.strip()] #ret
+    elif valueOrMacro.strip() in macros:
+        # ret = getMacroValue(macros[valueOrMacro.strip()], extraMacros).strip()
+        return macros[valueOrMacro.strip()] #ret
     else:
         return valueOrMacro.strip()
 
 def isMacroAFunc(macro, extraMacros = {}):
     return macro in macroFunctions or (macro in extraMacros and type(extraMacros[macro]) == tuple)
 
-def defined(macro, extraMacros = {}):
-    return macro in macros or macro in macroFunctions or macro in extraMacros
+# Overriding the macros list and the macro functions list is possible
+def defined(macro, extraMacros = {}, macroList = macros, functions = macroFunctions):
+    return macro in macroList or macro in functions or macro in extraMacros
 
 def isFloat(value):
     try:
@@ -150,14 +151,10 @@ def tokenize(expression):
 
 # The shunting yard algorithm
 def parseExpression(expression):
-    # print expression
-    # tokens = [i for i in re.split(r'(\d+|\W+)', expression) if i]
     tokens = tokenize(expression)
 
     outputqueue = []
     operatorstack = []
-
-    # print tokens
 
     i = 0
     while i < len(tokens):
@@ -167,24 +164,17 @@ def parseExpression(expression):
             while (operatorstack and
                    (getPrecedence(operatorstack[-1]) <= getPrecedence(token)) and
                    (getAssociativity(operatorstack[-1]) == "left")):
-                # print "Adding operator '" + operatorstack[-1] + "' (precedence %d) to output."%getPrecedence(operatorstack[-1])
                 outputqueue.append(operatorstack.pop())
-            # print "Adding '" + token + "' (precedence %d) to operator stack"%getPrecedence(token)
             operatorstack.append(token)
         elif token == "(":
-            # print "Adding operator '" + token + "' to operator stack"
             operatorstack.append(token)
         elif token == ")":
             while operatorstack and operatorstack[-1] != "(":
-                # print "Adding operator '" + operatorstack[-1] + "' to output"
                 outputqueue.append(operatorstack.pop())
-            # print outputqueue
             operatorstack.pop()
         elif not isoperator(token):
-            # print "Adding operand '" + token + "' to output"
             outputqueue.append(token)
         else:
-            # print "Adding '" + token + "' to output"
             outputqueue.append(token)
 
         i += 1
@@ -196,14 +186,11 @@ def parseExpression(expression):
     while operatorstack:
         outputqueue.append(operatorstack.pop())
 
-    # print outputqueue
-
     return outputqueue
 
 def evaluateExpression(expression):
     polishNotation = parseExpression(expression)
     valuesStack = []
-    # print "EVALUATE"
     for token in polishNotation:
         if isoperator(token):
             operator = token
@@ -212,8 +199,6 @@ def evaluateExpression(expression):
             elif operator == "||": operator = "or"
             elif operator == "!": operator = "not"
 
-            # print operator
-
             result = ""
             if getNumOperands(operator) == 2:
                 rightoperand = getMacroValue(str(valuesStack.pop()))
@@ -221,7 +206,6 @@ def evaluateExpression(expression):
 
                 result = eval(leftoperand + ' ' + operator + ' ' + rightoperand)
             else:
-                # print valuesStack
                 operand = str(valuesStack.pop())
                 if operator == "defined":
                     result = defined(operand)
@@ -230,7 +214,6 @@ def evaluateExpression(expression):
 
             valuesStack.append(result)
         else:
-            # print token
             valuesStack.append(token)
 
     if len(valuesStack) != 1:
@@ -242,78 +225,117 @@ def evaluateExpression(expression):
 def stringify(token):
     return '"' + token + '"'
 
+def expandMacroFunc(funcName, paramsList, extraMacros = {}):
+    realParamsList = paramsList
+
+    funcParams, replaceValue = macroFunctions[funcName]
+
+    if(len(funcParams) == len(realParamsList) or (funcParams[-1] == "..." and len(realParamsList) >= (len(funcParams) - 1))):
+        if funcParams[-1] != "...":
+            for i in range(len(funcParams)):
+                extraMacros[funcParams[i]] = realParamsList[i]
+        else:
+            for i in range(len(funcParams) - 1):
+                extraMacros[funcParams[i]] = realParamsList[i]
+            vaName = funcParams[-1][:-3]
+            if vaName == '': vaName = "__VA_ARGS__"
+
+            extraMacros[vaName] = ", ".join(realParamsList[len(funcParams) - 1:])
+    else:
+        print "Invalid number of parameters"
+        sys.exit(1)
+
+    return replaceValue
+
+def performTokenOperations(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        if i + 2 < len(tokens) and tokens[i + 1] == "##":
+            tokens[i] = tokens[i] + tokens[i + 2]
+            tokens[i + 1] = ''
+            tokens[i + 2] = ''
+        elif token == "#" and i + 1 < len(tokens):
+            tokens[i] = '"' + tokens[i + 1] + '"'
+            tokens[i + 1] = ''
+
+        i += 1
+
+    return tokens
+
 def macroizeLine(line, extraMacros = {}):
     tokenized = [t for t in re.split(DELIMITER_REGEX, line) if len(t.strip()) != 0]
-    # print "MACROIZE START!"
 
     i = 0
-    stringing = False
+
     while i < len(tokenized):
         token = tokenized[i]
-        # Don't replace in strings
-        if "\"" in token or "'" in token:
-            if stringing:
-                stringing = False
+
+        if defined(token):
+            if isMacroAFunc(token):
+                params, value = macroFunctions[token]
+
+                # Remove the opening parenthesis
+                tokenized[i + 1] = ''
+
+                # Grab each individual parameter as a token
+                c = i + 2
+                givenParamsTokens = []
+                while tokenized[c] != ")":
+                    givenParamsTokens.append(tokenized[c])
+                    tokenized[c] = ''
+                    c += 1
+                tokenized[c] = ''
+
+                # Combine the parameters tokens and break them apart again based on commas
+                givenParams = [y.strip() for y in ' '.join(givenParamsTokens).split(',')]
+
+                if len(params) != len(givenParams):
+                    if params[-1].endswith("..."):
+                        vaName = params[-1][:-3]
+                        if vaName == '': vaName = '__VA_ARGS__'
+
+                        givenParams = givenParams[:len(params) - 1] + [', '.join(givenParams[len(params):])]
+                    else:
+                        print "Invalid number of parameters."
+                        sys.exit(1)
+
+                paramMap = dict(zip(params, givenParams))
+
+                ret = expandMacroFunc(token, givenParams)
+
+                rtokens = [t for t in re.split(DELIMITER_REGEX, ret) if len(t.strip()) != 0]
+
+                # Prescanning
+                # Expand only the parameters
+                c = 0
+                while(c < len(rtokens)):
+                    # print rtokens[c]
+                    if defined(rtokens[c], paramMap, macros, {}):
+                        rtokens[c] = getMacroValue(rtokens[c], paramMap)
+                    c += 1
+
+                rtokens = performTokenOperations(rtokens)
+
+                # Expand only the parameters again
+                c = 0
+                while(c < len(rtokens)):
+                    if defined(rtokens[c], paramMap, macros, {}):
+                        rtokens[c] = getMacroValue(rtokens[c], paramMap)
+                        continue
+                    c += 1
+
+                tokenized[i] = ''
+                tokenized[i:i] = rtokens
+
+                continue
             else:
-                stringing = True
-            continue
+                tokenized[i] = getMacroValue(token, extraMacros)
 
-        if not stringing:
-            # print token
-
-            if defined(token, extraMacros):
-                if isMacroAFunc(token, extraMacros):
-                    params, value = macroFunctions[token]
-                    # print params
-                    # print value
-                    numParams = len(params)
-
-                    i += 2
-                    start = i
-                    givenParamsTokens = []
-                    while tokenized[i] != ")":
-                        givenParamsTokens.append(tokenized[i])
-                        i += 1
-
-                    givenParams = [y.strip() for y in ' '.join(givenParamsTokens).split(',')]
-                    result = ""
-
-                    if len(params) > 0 and params[-1].endswith("..."):
-                        variadicName = params[-1][:-3]
-                        if variadicName == '': variadicName = "__VA_ARGS__"
-                        passableValues = dict(extraMacros,
-                                              **dict(zip(params[:-1] + [variadicName],
-                                                         givenParams[:len(params) - 1] + [", ".join([getMacroValue(p.strip()) for p in givenParams[len(params) - 1:]])])))
-                        # print "givenParams =", givenParams
-                        # print "passableValues =", passableValues
-                        # print "value = ", value.replace(variadicName, passableValues[variadicName])
-                        result = macroizeLine(value, passableValues)
-                        # print "RESULT =",result
-                    elif len(params) == len(givenParams):
-                        print givenParams
-
-                        passableValues = dict(extraMacros, **dict(zip(params, givenParams)))
-                        result = macroizeLine(value, passableValues)
-                        print result
-                    tokenized[start - 2] = result
-                    for t in range(start - 1, i + 1):
-                        tokenized[t] = ''
-
-                else:
-                    tokenized[i] = getMacroValue(token, extraMacros)
-
-            if token == '##':
-                if i != 0 and i + 1 < len(tokenized):
-                    tokenized[i] = getMacroValue(tokenized[i - 1], extraMacros) + getMacroValue(tokenized[i + 1], extraMacros)
-                    tokenized[i - 1] = ''
-                    tokenized[i + 1] = ''
-                else:
-                    print "Stray '##' in the program"
-                    sys.exit(1)
         i += 1
 
     return ' '.join(tokenized)
-
 
 def getWord(line):
     match = re.match(r'^\s*(\w+)', line)
@@ -425,7 +447,7 @@ def ifStatement(cond, i, lines, skipAll = False):
                 line = line[:line.find('/*')]
                 blockcomment = True
 
-            if line.lstrip().startswith("#"):
+            if line.startswith("#"):
                 directive, nodirective = getDirectiveAndNoDirective(line)
                 removeLine = True
             else:
@@ -478,7 +500,13 @@ def ifStatement(cond, i, lines, skipAll = False):
     else:
         while i < len(lines):
             line = lines[i].strip()
-            directive, nodirective = getDirectiveAndNoDirective(line)
+
+            if line.startswith("#"):
+                directive, nodirective = getDirectiveAndNoDirective(line)
+                removeLine = True
+            else:
+                directive, nodirective = ["",""]
+
             if directive == "if" or directive == "ifdef" or directive == "ifndef":
                 lines[i] = ""
                 i = ifStatement(False, i + 1, lines, True)
@@ -494,7 +522,6 @@ def ifStatement(cond, i, lines, skipAll = False):
                     i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
                     return i
             elif directive == "endif":
-                print "endif"
                 lines[i] = ""
                 return i + 1
 
