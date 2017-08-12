@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import print_function
 
 import os, sys, re
 
@@ -180,7 +181,7 @@ def parseExpression(expression):
         i += 1
 
     if "(" in operatorstack:
-        print "mismatched parethesis!"
+        print("mismatched parethesis!")
         return []
 
     while operatorstack:
@@ -217,7 +218,7 @@ def evaluateExpression(expression):
             valuesStack.append(token)
 
     if len(valuesStack) != 1:
-        print "Malformed expression!"
+        print("Malformed expression!")
         return 0
 
     return valuesStack[0]
@@ -242,7 +243,7 @@ def expandMacroFunc(funcName, paramsList, extraMacros = {}):
 
             extraMacros[vaName] = ", ".join(realParamsList[len(funcParams) - 1:])
     else:
-        print "Invalid number of parameters"
+        print("Invalid number of parameters")
         sys.exit(1)
 
     return replaceValue
@@ -298,7 +299,7 @@ def macroizeLine(line, extraMacros = {}):
 
                         givenParams = givenParams[:len(params) - 1] + [', '.join(givenParams[len(params):])]
                     else:
-                        print "Invalid number of parameters."
+                        print("Invalid number of parameters.")
                         sys.exit(1)
 
                 paramMap = dict(zip(params, givenParams))
@@ -353,6 +354,14 @@ def getDirectiveAndNoDirective(line):
         c += 1
     return nosharp[:c], nosharp[c:].lstrip()
 
+def perror(error, filename, line, linenum, column):
+    print("%s:%d:%d: error: %s"%(filename, linenum, column, error), file=sys.stderr)
+    if line != "":
+        print(" %s"%line, file=sys.stderr)
+    if column > 0:
+        print((" "*column) + "^", file=sys.stderr)
+    sys.exit(1)
+
 def main():
     global includeDirs
 
@@ -377,10 +386,10 @@ def main():
 
     i = 1
     for line in processedLines:
-        print i, ":", line
+        print("%d : %s"%(i, line))
         i += 1
 
-def includeStatement(nodirective, i, lines):
+def includeStatement(nodirective, i, lines, oldFilename):
     filename = nodirective[1:].split('>' if nodirective.startswith('<') else '"', 1)[0]
     fullFilename = None
 
@@ -394,8 +403,8 @@ def includeStatement(nodirective, i, lines):
         if os.path.exists(os.path.join(".", filename)):
             fullFilename = os.path.join(".", filename)
         else:
-            print "No such file or directory found: " + filename
-            sys.exit(1)
+            column = (lines[i].index('<') if nodirective.startswith('<') else linex[i].index('"')) + 1
+            perror("No such file or directory found `%s`"%filename, oldFilename, lines[i], i, column)
 
     lines[i] = ""
 
@@ -411,7 +420,7 @@ def includeStatement(nodirective, i, lines):
 
     return i
 
-def ifStatement(cond, i, lines, skipAll = False):
+def ifStatement(cond, i, lines, filename, lastIf, skipAll = False):
     if cond:
         remove = False
         blockcomment = False
@@ -455,11 +464,11 @@ def ifStatement(cond, i, lines, skipAll = False):
 
             if directive == "if":
                 lines[i] = ""
-                i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
+                i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines, filename, line)
                 continue
             elif directive == "ifndef":
                 lines[i] = ""
-                i = ifStatement(nodirective not in macros, i + 1, lines)
+                i = ifStatement(nodirective not in macros, i + 1, lines, filename, line)
                 continue
             elif directive == "else" or directive == "elif":
                 remove = True
@@ -467,10 +476,10 @@ def ifStatement(cond, i, lines, skipAll = False):
                 lines[i] = ""
                 return i + 1
             elif directive == "include":
-                lines[i] = ""
+                # lines[i] = ""
                 oldLineNum = getCurrentLine()
                 oldFilename = getMacroValue("__FILE__")
-                i += includeStatement(nodirective, i, lines)
+                i += includeStatement(nodirective, i, lines, filename)
                 macros["__FILE__"] = oldFilename
                 macros["__LINE__"] = str(oldLineNum)
                 removeLine = True
@@ -482,13 +491,13 @@ def ifStatement(cond, i, lines, skipAll = False):
                 removeLine = True
             elif directive == "ifdef":
                 lines[i] = ""
-                i = ifStatement(nodirective in macros, i + 1, lines)
+                i = ifStatement(nodirective in macros, i + 1, lines, filename, line)
                 removeLine = True
             elif directive == "define":
                 defineMacro(nodirective)
                 removeLine = True
             elif directive == "error":
-                doErrorDirective(line, nodirective)
+                doErrorDirective(line, filename, i, nodirective)
 
             if remove or removeLine:
                 line = ""
@@ -511,17 +520,17 @@ def ifStatement(cond, i, lines, skipAll = False):
 
             if directive == "if" or directive == "ifdef" or directive == "ifndef":
                 lines[i] = ""
-                i = ifStatement(False, i + 1, lines, True)
+                i = ifStatement(False, i + 1, lines, filename, lastIf, True)
                 continue
             elif directive == "else":
                 if not skipAll:
                     lines[i] = ""
-                    i = ifStatement(True, i + 1, lines)
+                    i = ifStatement(True, i + 1, lines, filename, lastIf)
                     return i
             elif directive == "elif":
                 if not skipAll:
                     lines[i] = ""
-                    i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
+                    i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines, filename, lastIf)
                     return i
             elif directive == "endif":
                 lines[i] = ""
@@ -534,8 +543,7 @@ def ifStatement(cond, i, lines, skipAll = False):
             i += 1
 
     if i >= len(lines):
-        print "Mismatched endifs"
-        sys.exit(1)
+        perror("Missing matching endif.", filename, lastIf, i - 1, 1)
 
     return i
 
@@ -586,7 +594,7 @@ def doLineDirective(nodirective):
     if not num.isdigit():
         value = getMacroValue(num)
         if not value.isdigit():
-            print "Invalid line digit-sequence specifier."
+            print("Invalid line digit-sequence specifier.")
             sys.exit(1)
 
     scharseq = ""
@@ -619,16 +627,15 @@ def undefineMacro(nodirective):
     elif macro in macroFunctions:
         macroFunctions.pop(macro, None)
     else:
-        print "Undefined macro " + macro
+        print("Undefined macro %s"%macro)
         sys.exit(1)
 
-def doErrorDirective(line, nodirective):
-    print nodirective
-    sys.exit(1)
+def doErrorDirective(line, filename, linenum, nodirective):
+    perror(nodirective, filename, line, linenum, 1)
 
 def process(filename, lines):
     global macros
-    print "Processing " + filename
+    print("Processing %s"%filename)
 
     macros["__FILE__"] = filename
     macros["__LINE__"] = "1"
@@ -678,7 +685,7 @@ def process(filename, lines):
 
             if directive == "if":
                 lines[i] = ""
-                i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines)
+                i = ifStatement(bool(int(evaluateExpression(nodirective))), i + 1, lines, filename, line)
 
             if directive == "define":
                 defineMacro(nodirective)
@@ -686,20 +693,20 @@ def process(filename, lines):
                 undefineMacro(nodirective)
             elif directive == "ifdef":
                 lines[i] = ""
-                i = ifStatement(nodirective in macros, i + 1, lines)
+                i = ifStatement(nodirective in macros, i + 1, lines, filename)
             elif directive == "ifndef":
                 lines[i] = ""
-                i = ifStatement(nodirective not in macros, i + 1, lines)
+                i = ifStatement(nodirective not in macros, i + 1, lines, filename)
             elif directive == "include":
                 oldFilename = filename
                 oldLineNum = getMacroValue("__LINE__")
-                i = includeStatement(nodirective, i, lines) + 1
+                i = includeStatement(nodirective, i, lines, filename) + 1
                 macros["__FILE__"] = oldFilename
                 macros["__LINE__"] = oldLineNum
             elif directive == "line":
                 doLineDirective(nodirective)
             elif directive == "error":
-                doErrorDirective(line, nodirective)
+                doErrorDirective(line, filename, i, nodirective)
 
             line = ""
 
@@ -710,7 +717,7 @@ def process(filename, lines):
 
         macros["__LINE__"] = str(int(macros["__LINE__"]) + 1)
 
-    print "Done processing " + filename
+    print("Done processing %s"%filename)
 
     return lines
 
