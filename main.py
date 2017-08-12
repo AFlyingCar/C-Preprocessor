@@ -487,6 +487,8 @@ def ifStatement(cond, i, lines, skipAll = False):
             elif directive == "define":
                 defineMacro(nodirective)
                 removeLine = True
+            elif directive == "error":
+                doErrorDirective(line, nodirective)
 
             if remove or removeLine:
                 line = ""
@@ -620,6 +622,10 @@ def undefineMacro(nodirective):
         print "Undefined macro " + macro
         sys.exit(1)
 
+def doErrorDirective(line, nodirective):
+    print nodirective
+    sys.exit(1)
+
 def process(filename, lines):
     global macros
     print "Processing " + filename
@@ -692,6 +698,8 @@ def process(filename, lines):
                 macros["__LINE__"] = oldLineNum
             elif directive == "line":
                 doLineDirective(nodirective)
+            elif directive == "error":
+                doErrorDirective(line, nodirective)
 
             line = ""
 
